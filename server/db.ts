@@ -79,26 +79,49 @@ class Database {
     site_config: [] as SiteConfig[],
   };
 
+  private maskConnectionString(url: string): string {
+    try {
+      // Basic split to avoid exposing password
+      const parts = url.split("@");
+      if (parts.length > 1) {
+        const protocolAndAuth = parts[0];
+        const hostAndPath = parts[1];
+        const authParts = protocolAndAuth.split(":");
+        if (authParts.length > 2) {
+          return `${authParts[0]}:${authParts[1]}:******@${hostAndPath}`;
+        }
+        return `******@${hostAndPath}`;
+      }
+      return url.substring(0, 30) + "...";
+    } catch {
+      return "DATABASE_URL_MASKED";
+    }
+  }
+
   constructor() {
     const dbUrl = process.env.DATABASE_URL;
+    console.log(`[Database Startup] NODE_ENV: ${process.env.NODE_ENV}`);
+    console.log(`[Database Startup] VERCEL Environment detected: ${!!process.env.VERCEL}`);
+    
     if (dbUrl) {
-      console.log("Database: DATABASE_URL is set, attempting to use PostgreSQL (Neon)...");
+      console.log(`[Database Startup] DATABASE_URL is provided: ${this.maskConnectionString(dbUrl)}`);
       try {
         this.pool = new Pool({
           connectionString: dbUrl,
           ssl: {
             rejectUnauthorized: false,
           },
-          connectionTimeoutMillis: 5000,
+          connectionTimeoutMillis: 8000,
         });
         this.isPostgres = true;
-      } catch (err) {
-        console.error("Database: Failed to initialize Postgres pool, falling back to local storage.", err);
+        console.log("[Database Startup] PostgreSQL Connection Pool initialized.");
+      } catch (err: any) {
+        console.error("[Database Startup] Failed to initialize Postgres Pool. Falling back to local storage.", err);
         this.isPostgres = false;
         this.pool = null;
       }
     } else {
-      console.log("Database: No DATABASE_URL found. Running with local JSON fallback database.");
+      console.log("[Database Startup] No DATABASE_URL found in environment. Defaulting to local JSON storage.");
     }
 
     if (!this.isPostgres) {
@@ -109,13 +132,15 @@ class Database {
   // Initialize and seed Postgres tables
   public async init() {
     if (this.isPostgres && this.pool) {
+      console.log("[Database Init] Testing connection to PostgreSQL...");
       try {
         // Try simple connection to check if DB is accessible
         const client = await this.pool.connect();
         client.release();
-        console.log("Database: Successfully connected to PostgreSQL.");
+        console.log("[Database Init] Connection test successful. Checking/migrating tables...");
 
         // Create tables if they don't exist
+        console.log("[Database Init] Verifying table: 'users'...");
         await this.query(`
           CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
@@ -126,6 +151,7 @@ class Database {
           );
         `);
 
+        console.log("[Database Init] Verifying table: 'categories'...");
         await this.query(`
           CREATE TABLE IF NOT EXISTS categories (
             id SERIAL PRIMARY KEY,
@@ -136,6 +162,7 @@ class Database {
           );
         `);
 
+        console.log("[Database Init] Verifying table: 'products'...");
         await this.query(`
           CREATE TABLE IF NOT EXISTS products (
             id SERIAL PRIMARY KEY,
@@ -149,6 +176,7 @@ class Database {
           );
         `);
 
+        console.log("[Database Init] Verifying table: 'cards'...");
         await this.query(`
           CREATE TABLE IF NOT EXISTS cards (
             id SERIAL PRIMARY KEY,
@@ -161,6 +189,7 @@ class Database {
           );
         `);
 
+        console.log("[Database Init] Verifying table: 'orders'...");
         await this.query(`
           CREATE TABLE IF NOT EXISTS orders (
             id VARCHAR(255) PRIMARY KEY,
@@ -175,6 +204,7 @@ class Database {
           );
         `);
 
+        console.log("[Database Init] Verifying table: 'site_config'...");
         await this.query(`
           CREATE TABLE IF NOT EXISTS site_config (
             key VARCHAR(255) PRIMARY KEY,
@@ -182,9 +212,8 @@ class Database {
           );
         `);
 
-        console.log("Database: PostgreSQL tables checked/created.");
-
         // Check and apply column upgrades for custom fields and redemption code
+        console.log("[Database Init] Verifying schemas for columns (products.custom_fields, orders.custom_values, orders.exchange_code)...");
         await this.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS custom_fields TEXT DEFAULT '';`);
         await this.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS custom_values TEXT DEFAULT '';`);
         await this.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS exchange_code VARCHAR(255) DEFAULT '';`);
@@ -192,14 +221,12 @@ class Database {
         // Seed default admin if missing
         const adminCheck = await this.query("SELECT * FROM users WHERE role = 'admin' LIMIT 1");
         if (adminCheck.rows.length === 0) {
-          // Default password is 'admin123'
-          // Using standard PBKDF2 or a precomputed salt hash. Let's use a safe fallback hash
           const defaultHash = this.hashPassword("admin123");
           await this.query(
             "INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3)",
             ["admin", defaultHash, "admin"]
           );
-          console.log("Database: Seeded default admin account (username: admin, password: admin123)");
+          console.log("[Database Init] Default admin account seeded (username: admin, password: admin123)");
         }
 
         // Seed default site config if missing
@@ -209,11 +236,28 @@ class Database {
           await this.query("INSERT INTO site_config (key, value) VALUES ($1, $2)", ["announcement", "欢迎使用本自动发卡平台！24小时自助发卡，安全可靠。"]);
           await this.query("INSERT INTO site_config (key, value) VALUES ($1, $2)", ["contact_info", "QQ: 123456789 | Email: service@example.com"]);
           await this.query("INSERT INTO site_config (key, value) VALUES ($1, $2)", ["payment_instructions", "请选择以下模拟支付通道，支付成功后系统将自动发放卡密！"]);
-          console.log("Database: Seeded default site configurations");
+          console.log("[Database Init] Default site configurations seeded.");
         }
 
-      } catch (err) {
-        console.error("Database: Error checking/creating tables on Postgres, falling back to JSON local storage", err);
+        // Fetch counts for startup log summary
+        const userCount = await this.query("SELECT COUNT(*) FROM users");
+        const categoryCount = await this.query("SELECT COUNT(*) FROM categories");
+        const productCount = await this.query("SELECT COUNT(*) FROM products");
+        const cardCount = await this.query("SELECT COUNT(*) FROM cards");
+        const orderCount = await this.query("SELECT COUNT(*) FROM orders");
+        
+        console.log(`=========================================`);
+        console.log(`[Database Init] POSTGRES DATABASE SUMMARY:`);
+        console.log(`- Total Registered Users: ${userCount.rows[0].count}`);
+        console.log(`- Total Categories: ${categoryCount.rows[0].count}`);
+        console.log(`- Total Products: ${productCount.rows[0].count}`);
+        console.log(`- Total Cards (Redemption Keys): ${cardCount.rows[0].count}`);
+        console.log(`- Total Orders: ${orderCount.rows[0].count}`);
+        console.log(`=========================================`);
+
+      } catch (err: any) {
+        console.error("[Database Init] PostgreSQL connection or migration failed! Error detail:", err);
+        console.warn("[Database Init] Falling back to JSON local storage.");
         this.isPostgres = false;
         this.pool = null;
         this.initJsonDb();
@@ -307,7 +351,21 @@ class Database {
   // Run arbitrary query on PostgreSQL
   private async query(text: string, params?: any[]) {
     if (!this.pool) throw new Error("Postgres pool is not initialized");
-    return this.pool.query(text, params);
+    const start = Date.now();
+    try {
+      const res = await this.pool.query(text, params);
+      const duration = Date.now() - start;
+      const cleanSql = text.replace(/\s+/g, " ").trim();
+      const sqlSnippet = cleanSql.substring(0, 150) + (cleanSql.length > 150 ? "..." : "");
+      console.log(`[SQL Query] SUCCESS (${duration}ms): ${sqlSnippet}`);
+      return res;
+    } catch (err: any) {
+      const duration = Date.now() - start;
+      const cleanSql = text.replace(/\s+/g, " ").trim();
+      const sqlSnippet = cleanSql.substring(0, 150) + (cleanSql.length > 150 ? "..." : "");
+      console.error(`[SQL Query] FAILED (${duration}ms): ${sqlSnippet} - Error: ${err.message}`);
+      throw err;
+    }
   }
 
   // ==========================================

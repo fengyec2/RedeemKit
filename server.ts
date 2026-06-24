@@ -88,15 +88,41 @@ async function sendNotificationEmail(order: any, customValues: string) {
   }
 }
 
+const app = express();
+const PORT = 3000;
+
+// Middleware
+app.use(express.json());
+
+// Database safety gate for serverless/cold-start environments
+let dbInitialized = false;
+let dbInitPromise: Promise<void> | null = null;
+
+async function ensureDb() {
+  if (!dbInitialized) {
+    if (!dbInitPromise) {
+      dbInitPromise = db.init().then(() => {
+        dbInitialized = true;
+      });
+    }
+    await dbInitPromise;
+  }
+}
+
+app.use(async (req, res, next) => {
+  // Avoid checking for assets if desired, but always check for API
+  try {
+    await ensureDb();
+    next();
+  } catch (err: any) {
+    console.error("[Server Error] Database initialization failed in middleware request handler:", err);
+    res.status(500).json({ error: "服务器数据库连接或初始化失败，请确认配置。详情: " + err.message });
+  }
+});
+
 async function startServer() {
-  const app = express();
-  const PORT = 3000;
-
-  // Middleware
-  app.use(express.json());
-
-  // Initialize DB tables
-  await db.init();
+  // Initialize DB tables on startup for normal containers (optional fallback since middleware handles it)
+  ensureDb().catch(err => console.error("Database pre-init error:", err));
 
   // ==========================================
   // PUBLIC CLIENT APIS
@@ -505,15 +531,29 @@ async function startServer() {
   }
 
   // Listen
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`==================================================`);
-    console.log(`Server successfully started and running on port ${PORT}`);
-    console.log(`Address: http://0.0.0.0:${PORT}`);
-    console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
-    console.log(`==================================================`);
+  if (!process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`==================================================`);
+      console.log(`Server successfully started and running on port ${PORT}`);
+      console.log(`Address: http://0.0.0.0:${PORT}`);
+      console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
+      console.log(`==================================================`);
+    });
+  } else {
+    console.log("[Server] Running inside Vercel serverless environment. Skipping app.listen().");
+  }
+}
+
+// Start local/container server
+if (!process.env.VERCEL) {
+  startServer().catch(err => {
+    console.error("Critical error while starting express server:", err);
+  });
+} else {
+  // For serverless cold start, still trigger startServer routes binding
+  startServer().catch(err => {
+    console.error("Critical error while configuring serverless express server:", err);
   });
 }
 
-startServer().catch(err => {
-  console.error("Critical error while starting express server:", err);
-});
+export default app;
