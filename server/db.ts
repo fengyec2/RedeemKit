@@ -67,7 +67,9 @@ export interface SiteConfig {
 class Database {
   private pool: Pool | null = null;
   private isPostgres = false;
-  private jsonDbPath = path.join(process.cwd(), "data", "db.json");
+  private jsonDbPath = process.env.VERCEL 
+    ? path.join("/tmp", "db.json") 
+    : path.join(process.cwd(), "data", "db.json");
 
   // In-memory data for JSON fallback
   private localData = {
