@@ -1,6 +1,5 @@
 import express, { Request, Response } from "express";
 import * as path from "path";
-import { createServer as createViteServer } from "vite";
 import nodemailer from "nodemailer";
 import { db } from "./server/db";
 import { adminRequired, generateToken, AuthenticatedRequest } from "./server/auth";
@@ -512,9 +511,10 @@ async function startServer() {
   // VITE SERVER & FRONTEND SERVING
   // ==========================================
 
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
     // Development Mode: Use Vite Middleware
     console.log("Database: Initializing Vite in dev middleware mode...");
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",

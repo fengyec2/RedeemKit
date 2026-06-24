@@ -112,6 +112,8 @@ class Database {
             rejectUnauthorized: false,
           },
           connectionTimeoutMillis: 8000,
+          max: 4,
+          idleTimeoutMillis: 10000,
         });
         this.isPostgres = true;
         console.log("[Database Startup] PostgreSQL Connection Pool initialized.");
@@ -137,106 +139,118 @@ class Database {
         // Try simple connection to check if DB is accessible
         const client = await this.pool.connect();
         client.release();
-        console.log("[Database Init] Connection test successful. Checking/migrating tables...");
+        console.log("[Database Init] Connection test successful.");
 
-        // Create tables if they don't exist
-        console.log("[Database Init] Verifying table: 'users'...");
-        await this.query(`
-          CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            username VARCHAR(255) UNIQUE NOT NULL,
-            password_hash VARCHAR(255) NOT NULL,
-            role VARCHAR(50) NOT NULL DEFAULT 'user',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-          );
-        `);
-
-        console.log("[Database Init] Verifying table: 'categories'...");
-        await this.query(`
-          CREATE TABLE IF NOT EXISTS categories (
-            id SERIAL PRIMARY KEY,
-            name VARCHAR(255) NOT NULL,
-            description TEXT,
-            sort_order INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-          );
-        `);
-
-        console.log("[Database Init] Verifying table: 'products'...");
-        await this.query(`
-          CREATE TABLE IF NOT EXISTS products (
-            id SERIAL PRIMARY KEY,
-            category_id INTEGER NOT NULL,
-            name VARCHAR(255) NOT NULL,
-            description TEXT,
-            price DECIMAL(10, 2) NOT NULL,
-            status VARCHAR(50) DEFAULT 'active',
-            image_url TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-          );
-        `);
-
-        console.log("[Database Init] Verifying table: 'cards'...");
-        await this.query(`
-          CREATE TABLE IF NOT EXISTS cards (
-            id SERIAL PRIMARY KEY,
-            product_id INTEGER NOT NULL,
-            code TEXT NOT NULL,
-            status VARCHAR(50) DEFAULT 'unsold',
-            order_id VARCHAR(255),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            sold_at TIMESTAMP
-          );
-        `);
-
-        console.log("[Database Init] Verifying table: 'orders'...");
-        await this.query(`
-          CREATE TABLE IF NOT EXISTS orders (
-            id VARCHAR(255) PRIMARY KEY,
-            product_id INTEGER NOT NULL,
-            product_name VARCHAR(255) NOT NULL,
-            quantity INTEGER NOT NULL,
-            price DECIMAL(10, 2) NOT NULL,
-            total_amount DECIMAL(10, 2) NOT NULL,
-            contact_info VARCHAR(255) NOT NULL,
-            card_codes TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-          );
-        `);
-
-        console.log("[Database Init] Verifying table: 'site_config'...");
-        await this.query(`
-          CREATE TABLE IF NOT EXISTS site_config (
-            key VARCHAR(255) PRIMARY KEY,
-            value TEXT NOT NULL
-          );
-        `);
-
-        // Check and apply column upgrades for custom fields and redemption code
-        console.log("[Database Init] Verifying schemas for columns (products.custom_fields, orders.custom_values, orders.exchange_code)...");
-        await this.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS custom_fields TEXT DEFAULT '';`);
-        await this.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS custom_values TEXT DEFAULT '';`);
-        await this.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS exchange_code VARCHAR(255) DEFAULT '';`);
-        
-        // Seed default admin if missing
-        const adminCheck = await this.query("SELECT * FROM users WHERE role = 'admin' LIMIT 1");
-        if (adminCheck.rows.length === 0) {
-          const defaultHash = this.hashPassword("admin123");
-          await this.query(
-            "INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3)",
-            ["admin", defaultHash, "admin"]
-          );
-          console.log("[Database Init] Default admin account seeded (username: admin, password: admin123)");
+        // Highly efficient check to skip migrations if already seeded
+        let isAlreadyMigrated = false;
+        try {
+          await this.query("SELECT key FROM site_config LIMIT 1");
+          isAlreadyMigrated = true;
+          console.log("[Database Init] Database tables and configurations already present. Skipping table check/creation DDL queries.");
+        } catch (e) {
+          console.log("[Database Init] Database site_config table not found or incomplete. Proceeding with table check and DDL migrations...");
         }
 
-        // Seed default site config if missing
-        const configCheck = await this.query("SELECT * FROM site_config LIMIT 1");
-        if (configCheck.rows.length === 0) {
-          await this.query("INSERT INTO site_config (key, value) VALUES ($1, $2)", ["site_title", "自动发卡平台"]);
-          await this.query("INSERT INTO site_config (key, value) VALUES ($1, $2)", ["announcement", "欢迎使用本自动发卡平台！24小时自助发卡，安全可靠。"]);
-          await this.query("INSERT INTO site_config (key, value) VALUES ($1, $2)", ["contact_info", "QQ: 123456789 | Email: service@example.com"]);
-          await this.query("INSERT INTO site_config (key, value) VALUES ($1, $2)", ["payment_instructions", "请选择以下模拟支付通道，支付成功后系统将自动发放卡密！"]);
-          console.log("[Database Init] Default site configurations seeded.");
+        if (!isAlreadyMigrated) {
+          // Create tables if they don't exist
+          console.log("[Database Init] Verifying table: 'users'...");
+          await this.query(`
+            CREATE TABLE IF NOT EXISTS users (
+              id SERIAL PRIMARY KEY,
+              username VARCHAR(255) UNIQUE NOT NULL,
+              password_hash VARCHAR(255) NOT NULL,
+              role VARCHAR(50) NOT NULL DEFAULT 'user',
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+          `);
+
+          console.log("[Database Init] Verifying table: 'categories'...");
+          await this.query(`
+            CREATE TABLE IF NOT EXISTS categories (
+              id SERIAL PRIMARY KEY,
+              name VARCHAR(255) NOT NULL,
+              description TEXT,
+              sort_order INTEGER DEFAULT 0,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+          `);
+
+          console.log("[Database Init] Verifying table: 'products'...");
+          await this.query(`
+            CREATE TABLE IF NOT EXISTS products (
+              id SERIAL PRIMARY KEY,
+              category_id INTEGER NOT NULL,
+              name VARCHAR(255) NOT NULL,
+              description TEXT,
+              price DECIMAL(10, 2) NOT NULL,
+              status VARCHAR(50) DEFAULT 'active',
+              image_url TEXT,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+          `);
+
+          console.log("[Database Init] Verifying table: 'cards'...");
+          await this.query(`
+            CREATE TABLE IF NOT EXISTS cards (
+              id SERIAL PRIMARY KEY,
+              product_id INTEGER NOT NULL,
+              code TEXT NOT NULL,
+              status VARCHAR(50) DEFAULT 'unsold',
+              order_id VARCHAR(255),
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              sold_at TIMESTAMP
+            );
+          `);
+
+          console.log("[Database Init] Verifying table: 'orders'...");
+          await this.query(`
+            CREATE TABLE IF NOT EXISTS orders (
+              id VARCHAR(255) PRIMARY KEY,
+              product_id INTEGER NOT NULL,
+              product_name VARCHAR(255) NOT NULL,
+              quantity INTEGER NOT NULL,
+              price DECIMAL(10, 2) NOT NULL,
+              total_amount DECIMAL(10, 2) NOT NULL,
+              contact_info VARCHAR(255) NOT NULL,
+              card_codes TEXT NOT NULL,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+          `);
+
+          console.log("[Database Init] Verifying table: 'site_config'...");
+          await this.query(`
+            CREATE TABLE IF NOT EXISTS site_config (
+              key VARCHAR(255) PRIMARY KEY,
+              value TEXT NOT NULL
+            );
+          `);
+
+          // Check and apply column upgrades for custom fields and redemption code
+          console.log("[Database Init] Verifying schemas for columns (products.custom_fields, orders.custom_values, orders.exchange_code)...");
+          await this.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS custom_fields TEXT DEFAULT '';`);
+          await this.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS custom_values TEXT DEFAULT '';`);
+          await this.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS exchange_code VARCHAR(255) DEFAULT '';`);
+          
+          // Seed default admin if missing
+          const adminCheck = await this.query("SELECT * FROM users WHERE role = 'admin' LIMIT 1");
+          if (adminCheck.rows.length === 0) {
+            const defaultHash = this.hashPassword("admin123");
+            await this.query(
+              "INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3)",
+              ["admin", defaultHash, "admin"]
+            );
+            console.log("[Database Init] Default admin account seeded (username: admin, password: admin123)");
+          }
+
+          // Seed default site config if missing
+          const configCheck = await this.query("SELECT * FROM site_config LIMIT 1");
+          if (configCheck.rows.length === 0) {
+            await this.query("INSERT INTO site_config (key, value) VALUES ($1, $2)", ["site_title", "自动发卡平台"]);
+            await this.query("INSERT INTO site_config (key, value) VALUES ($1, $2)", ["announcement", "欢迎使用本自动发卡平台！24小时自助发卡，安全可靠。"]);
+            await this.query("INSERT INTO site_config (key, value) VALUES ($1, $2)", ["contact_info", "QQ: 123456789 | Email: service@example.com"]);
+            await this.query("INSERT INTO site_config (key, value) VALUES ($1, $2)", ["payment_instructions", "请选择以下模拟支付通道，支付成功后系统将自动发放卡密！"]);
+            console.log("[Database Init] Default site configurations seeded.");
+          }
         }
 
         // Fetch counts for startup log summary
