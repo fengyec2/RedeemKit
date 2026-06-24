@@ -1,0 +1,6 @@
+{
+  "name": "自动发卡平台",
+  "description": "一个功能完整的24小时自助虚拟发卡平台。支持商品分类管理、批量卡密补货、销售订单记录跟踪、站点外观定制以及用户权限校验，支持链接Neon PostgreSQL Database。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
