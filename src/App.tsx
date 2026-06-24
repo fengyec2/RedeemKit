@@ -128,7 +128,15 @@ export default function App() {
         body: JSON.stringify(loginForm),
       });
 
-      const data = await res.json();
+      // Safely parse response - handle non-JSON error pages gracefully
+      const text = await res.text();
+      let data: any;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        throw new Error("服务器返回了非预期的响应（可能为 HTML 错误页），请检查 Vercel 部署配置和环境变量是否正确设置。");
+      }
+
       if (!res.ok) {
         throw new Error(data.error || "用户名或密码不正确");
       }

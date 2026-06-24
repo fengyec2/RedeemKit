@@ -100,9 +100,15 @@ let dbInitPromise: Promise<void> | null = null;
 async function ensureDb() {
   if (!dbInitialized) {
     if (!dbInitPromise) {
-      dbInitPromise = db.init().then(() => {
-        dbInitialized = true;
-      });
+      dbInitPromise = db.init()
+        .then(() => {
+          dbInitialized = true;
+        })
+        .catch((err) => {
+          // Reset promise on failure so subsequent requests can retry
+          dbInitPromise = null;
+          throw err;
+        });
     }
     await dbInitPromise;
   }
@@ -508,6 +514,28 @@ async function startServer() {
   });
 
   // ==========================================
+  // HEALTH CHECK & API FALLBACK
+  // ==========================================
+
+  // Health check endpoint for debugging deployment issues
+  app.get("/api/health", (req: Request, res: Response) => {
+    res.json({
+      status: "ok",
+      env: {
+        NODE_ENV: process.env.NODE_ENV || "development",
+        VERCEL: !!process.env.VERCEL,
+        HAS_DATABASE_URL: !!process.env.DATABASE_URL,
+      },
+      db: db.getStatus(),
+    });
+  });
+
+  // JSON 404 for unmatched API routes (prevents HTML error pages)
+  app.all("/api/*", (req: Request, res: Response) => {
+    res.status(404).json({ error: `API 端点不存在: ${req.method} ${req.path}` });
+  });
+
+  // ==========================================
   // VITE SERVER & FRONTEND SERVING
   // ==========================================
 
@@ -520,8 +548,9 @@ async function startServer() {
       appType: "spa",
     });
     app.use(vite.middlewares);
-  } else {
-    // Production Mode: Serve compiled static files
+  } else if (!process.env.VERCEL) {
+    // Local Production Mode: Serve compiled static files from dist/
+    // (On Vercel, static files are served by the platform via rewrites)
     console.log("Database: Running in Production Mode. Serving dist files.");
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
@@ -529,6 +558,7 @@ async function startServer() {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
+  // Vercel mode: no static file serving needed - Vercel handles via rewrites
 
   // Listen
   if (!process.env.VERCEL) {

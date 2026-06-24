@@ -108,12 +108,40 @@ class Database {
     if (dbUrl) {
       console.log(`[Database Startup] DATABASE_URL is provided: ${this.maskConnectionString(dbUrl)}`);
       try {
+        // Clean the connection string: remove parameters that can cause issues
+        // with the pg library in serverless environments.
+        // - channel_binding: can cause connection failures in serverless
+        // - sslmode: we set ssl explicitly below, removing sslmode avoids
+        //   pg treating 'require' as 'verify-full' which may fail if the
+        //   serverless environment lacks the proper CA bundle
+        let cleanUrl = dbUrl;
+        try {
+          const parsed = new URL(dbUrl);
+          let modified = false;
+          if (parsed.searchParams.has("channel_binding")) {
+            parsed.searchParams.delete("channel_binding");
+            modified = true;
+            console.log("[Database Startup] Removed channel_binding parameter for pg compatibility.");
+          }
+          if (parsed.searchParams.has("sslmode")) {
+            parsed.searchParams.delete("sslmode");
+            modified = true;
+            console.log("[Database Startup] Removed sslmode parameter (using explicit ssl config instead).");
+          }
+          if (modified) {
+            cleanUrl = parsed.toString();
+          }
+        } catch {
+          // Fallback: regex removal if URL parsing fails
+          cleanUrl = dbUrl.replace(/&?channel_binding=[^&]*/g, "").replace(/&?sslmode=[^&]*/g, "");
+        }
+
         this.pool = new Pool({
-          connectionString: dbUrl,
+          connectionString: cleanUrl,
           ssl: {
             rejectUnauthorized: false,
           },
-          connectionTimeoutMillis: 8000,
+          connectionTimeoutMillis: 5000,
           max: 4,
           idleTimeoutMillis: 10000,
         });
@@ -131,6 +159,14 @@ class Database {
     if (!this.isPostgres) {
       this.initJsonDb();
     }
+  }
+
+  // Public status method for health check endpoint
+  public getStatus(): { isPostgres: boolean; hasPool: boolean } {
+    return {
+      isPostgres: this.isPostgres,
+      hasPool: !!this.pool,
+    };
   }
 
   // Initialize and seed Postgres tables
